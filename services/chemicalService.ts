@@ -1,81 +1,197 @@
 
-import { GoogleGenAI } from "@google/genai";
-import { Chemical, Rule, SafetyLevel, ReactionResult } from '../types';
+import { Chemical, SafetyLevel, ReactionResult } from '../types';
 import { COMMON_CHEMICALS, REACTION_RULES } from '../constants';
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
+/**
+ * Normalize input ONLY if possible.
+ * If not found, we DO NOT fail — AI will handle it.
+ */
 export function normalizeInput(input: string): Chemical | null {
   const sanitized = input.trim().toLowerCase();
   if (!sanitized) return null;
 
-  // Search by name, formula, or alias
-  return COMMON_CHEMICALS.find(c => 
-    c.name.toLowerCase() === sanitized || 
-    c.formula.toLowerCase() === sanitized || 
-    c.aliases.some(a => a.toLowerCase() === sanitized)
-  ) || null;
+  return (
+    COMMON_CHEMICALS.find(c =>
+      c.name.toLowerCase() === sanitized ||
+      c.formula.toLowerCase() === sanitized ||
+      c.aliases.some(a => a.toLowerCase() === sanitized)
+    ) || null
+  );
 }
 
-export async function checkReaction(c1: Chemical, c2: Chemical): Promise<ReactionResult> {
-  if (c1.id === c2.id) {
+/**
+ * Main reaction check.
+ * Accepts RAW user inputs.
+ */
+export async function checkReaction(
+  input1: string,
+  input2: string
+): Promise<ReactionResult> {
+
+  const c1 = normalizeInput(input1);
+  const c2 = normalizeInput(input2);
+
+  // --------------------------------------------------
+  // 1️⃣ SAME CHEMICAL (only if both recognized)
+  // --------------------------------------------------
+  if (c1 && c2 && c1.id === c2.id) {
     return {
       type: SafetyLevel.SAFE,
       title: 'Same Substance',
-      explanation: `You are mixing ${c1.name} with itself. No reaction will occur beyond volume increase.`,
+      explanation: `You are mixing ${c1.name} with itself. No chemical reaction will occur.`,
       recommendations: ['Mixing identical substances is safe.'],
-      chemicals: [c1.name, c2.name],
+      chemicals: [input1, input2],
       timestamp: Date.now()
     };
   }
 
-  // Check predefined rules (order independent)
-  const rule = REACTION_RULES.find(r => 
-    (r.chemicals[0] === c1.id && r.chemicals[1] === c2.id) ||
-    (r.chemicals[0] === c2.id && r.chemicals[1] === c1.id)
-  );
+  // --------------------------------------------------
+  // 2️⃣ RULE-BASED FAST PATH (only if both recognized)
+  // --------------------------------------------------
+  if (c1 && c2) {
+    const rule = REACTION_RULES.find(r =>
+      (r.chemicals[0] === c1.id && r.chemicals[1] === c2.id) ||
+      (r.chemicals[0] === c2.id && r.chemicals[1] === c1.id)
+    );
 
-  if (rule) {
-    return {
-      ...rule.result,
-      chemicals: [c1.name, c2.name],
-      timestamp: Date.now()
-    };
+    if (rule) {
+      return {
+        ...rule.result,
+        chemicals: [input1, input2],
+        timestamp: Date.now()
+      };
+    }
   }
 
-  // If no rule found, use Gemini to intelligently assess if it's safe or unknown
+  // --------------------------------------------------
+  // 3️⃣ AI FALLBACK (ALWAYS AVAILABLE)
+  // --------------------------------------------------
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: `Analyze the safety of mixing ${c1.name} (${c1.formula}) with ${c2.name} (${c2.formula}). 
-      Provide a JSON response with:
-      - type: "Safe", "Mild", "Exothermic", "Dangerous", or "Very Dangerous"
-      - title: A short descriptive title
-      - explanation: One sentence about the reaction
-      - recommendations: A list of 2-3 safety tips`,
-      config: {
-        responseMimeType: "application/json",
-      }
+    // Backend expects 'chem1' and 'chem2' keys
+    const response = await fetch("http://localhost:5000/analyze", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        chem1: input1,
+        chem2: input2
+      })
     });
 
-    const data = JSON.parse(response.text);
+    if (!response.ok) {
+      throw new Error(`Backend Error: ${response.statusText}`);
+    }
+
+    const wrapper = await response.json();
+    if (wrapper.error) throw new Error(wrapper.error);
+
+    let data;
+    try {
+      // Try to parse the result as JSON first (if backend returns JSON string)
+      data = JSON.parse(wrapper.result);
+    } catch (e) {
+      // Fallback: Parse Markdown text from backend
+      // console.log("Parsing text response:", wrapper.result);
+      data = parseMarkdownResponse(wrapper.result);
+    }
+
+    // Ensure we have valid Chemical Safety Level
+    let safeType = data.type as SafetyLevel;
+    if (!Object.values(SafetyLevel).includes(safeType)) {
+      // specific fix for commonly returned "Generally Safe" not matching enum
+      if (data.type && data.type.toLowerCase().includes('safe')) safeType = SafetyLevel.SAFE;
+      else safeType = SafetyLevel.UNKNOWN;
+    }
+
     return {
-      type: data.type as SafetyLevel,
-      title: data.title,
-      explanation: data.explanation,
-      recommendations: data.recommendations,
-      chemicals: [c1.name, c2.name],
+      type: safeType,
+      title: data.title || "Analysis Result",
+      explanation: data.explanation || "No explanation provided.",
+      recommendations: data.recommendations || [],
+      chemicals: [input1, input2],
       timestamp: Date.now()
     };
+
   } catch (error) {
-    console.error("AI Check failed:", error);
+    console.error("AI analysis failed:", error);
+
+    // --------------------------------------------------
+    // 4️⃣ FINAL SAFETY FALLBACK (never silent)
+    // --------------------------------------------------
     return {
       type: SafetyLevel.UNKNOWN,
-      title: 'No Data Available',
-      explanation: 'This chemical combination is not in our primary safety database and AI analysis failed.',
-      recommendations: ['Assume it is unsafe', 'Do not mix unknown chemicals', 'Refer to MSDS sheets for both substances'],
-      chemicals: [c1.name, c2.name],
+      title: 'Analysis Failed',
+      explanation:
+        'The system could not confidently determine the safety of this combination. Please check if the backend is running.',
+      recommendations: [
+        'Do not mix unknown substances',
+        'Assume it may be unsafe',
+        'Refer to official safety documentation'
+      ],
+      chemicals: [input1, input2],
       timestamp: Date.now()
     };
   }
+}
+
+function parseMarkdownResponse(text: string): any {
+  const lowerText = text.toLowerCase();
+
+  // Determine Safety Level
+  let type = SafetyLevel.UNKNOWN;
+  if (lowerText.includes('unsafe') || lowerText.includes('danger') || lowerText.includes('toxic') || lowerText.includes('explode')) {
+    type = SafetyLevel.DANGEROUS;
+  } else if (lowerText.includes('exothermic')) {
+    type = SafetyLevel.EXOTHERMIC;
+  } else if (lowerText.includes('mild')) {
+    type = SafetyLevel.MILD;
+  } else if (lowerText.includes('safe')) {
+    type = SafetyLevel.SAFE;
+  }
+
+  // Extract Title from "**Category: ...**"
+  const categoryMatch = text.match(/\*\*Category:\s*(.*?)\*\*/i);
+  const title = categoryMatch ? categoryMatch[1].trim() : "Chemical Analysis";
+
+  // Extract Explanation
+  // Remove "Category" line
+  let explanation = text.replace(/\*\*Category:.*?\*\*/i, '').trim();
+  // Truncate at "Precautions" or "Safety" header
+  const splitRegex = /\*\*Precautions:?\*\*|\*\*Safety Considerations:?\*\*|\*\*Safety Precautions:?\*\*/i;
+  const parts = explanation.split(splitRegex);
+  if (parts.length > 1) {
+    explanation = parts[0].trim();
+  }
+
+  // Extract Recommendations
+  const recommendations: string[] = [];
+  // Find the section starting with Precautions/Safety
+  const precMatch = text.match(splitRegex);
+  if (precMatch) {
+    const index = precMatch.index;
+    if (index !== undefined) {
+      const rest = text.substring(index);
+      const lines = rest.split('\n');
+      lines.forEach(line => {
+        // Match bullet points like "1. ", "- ", "* "
+        const clean = line.replace(/^(\d+\.|-|\*)\s*/, '').trim();
+        // Filter out the header itself and empty lines
+        if (clean && !clean.toLowerCase().includes('precautions') && !clean.toLowerCase().includes('safety considerations')) {
+          recommendations.push(clean);
+        }
+      });
+    }
+  }
+
+  if (recommendations.length === 0) {
+    recommendations.push("Proceed with caution.");
+  }
+
+  return {
+    type,
+    title,
+    explanation,
+    recommendations: recommendations.slice(0, 5)
+  };
 }

@@ -21,13 +21,11 @@ const App: React.FC = () => {
 
     setIsLoading(true);
     try {
-      const normalized1 = normalizeInput(chem1);
-      const normalized2 = normalizeInput(chem2);
+      // usage of normalizeInput here is redundant as checkReaction handles it, 
+      // but keeping it if we wanted to show normalized names in UI could be useful. 
+      // However, checkReaction now returns 'chemicals' array which we use for history.
 
-      const c1: Chemical = normalized1 || { id: 'custom1', name: chem1, formula: '?', aliases: [] };
-      const c2: Chemical = normalized2 || { id: 'custom2', name: chem2, formula: '?', aliases: [] };
-      
-      const res = await checkReaction(c1, c2);
+      const res = await checkReaction(chem1, chem2);
       setResult(res);
       setHistory(prev => [res, ...prev.slice(0, 3)]);
     } catch (err) {
@@ -38,12 +36,12 @@ const App: React.FC = () => {
   };
 
   const GlassIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20"/><path d="m4.93 4.93 14.14 14.14"/><path d="M2 12h20"/><path d="m4.93 19.07 14.14-14.14"/></svg>
+    <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v20" /><path d="m4.93 4.93 14.14 14.14" /><path d="M2 12h20" /><path d="m4.93 19.07 14.14-14.14" /></svg>
   );
 
   return (
     <div className="min-h-screen flex flex-col relative">
-      
+
       <div className="flex-grow max-w-5xl mx-auto px-6 py-16 w-full relative z-10">
         {/* Header Section */}
         <header className="text-center mb-16">
@@ -62,26 +60,26 @@ const App: React.FC = () => {
 
         {/* Main Content Area */}
         <main className="space-y-12">
-          
+
           {/* Main Glass Input Card */}
           <section className="glass-card p-10 md:p-16 rounded-[3.5rem] shadow-2xl">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-10 w-full mb-12">
-              <ChemicalInput 
-                label="Component One" 
-                value={chem1} 
-                onChange={setChem1} 
+              <ChemicalInput
+                label="Component One"
+                value={chem1}
+                onChange={setChem1}
                 onSelect={(c) => setChem1(c.name)}
                 icon={<GlassIcon />}
               />
-              <ChemicalInput 
-                label="Component Two" 
-                value={chem2} 
-                onChange={setChem2} 
+              <ChemicalInput
+                label="Component Two"
+                value={chem2}
+                onChange={setChem2}
                 onSelect={(c) => setChem2(c.name)}
                 icon={<GlassIcon />}
               />
             </div>
-            
+
             <div className="flex justify-center">
               <button
                 onClick={handleCheck}
@@ -123,8 +121,8 @@ const App: React.FC = () => {
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                 {history.slice(1).map((item, idx) => (
-                  <div 
-                    key={idx} 
+                  <div
+                    key={idx}
                     onClick={() => setResult(item)}
                     className="glass-card hover:bg-white/40 p-6 rounded-[2rem] flex flex-col gap-4 cursor-pointer transition-all hover:-translate-y-2 group"
                   >
@@ -132,7 +130,7 @@ const App: React.FC = () => {
                       <span className="text-xs font-black text-slate-700 leading-tight truncate">
                         {item.chemicals[0]} + {item.chemicals[1]}
                       </span>
-                      <span 
+                      <span
                         className="w-3 h-3 rounded-full shadow-lg"
                         style={{ backgroundColor: (item.type === 'Safe' ? 'var(--safe)' : item.type === 'Mild' ? 'var(--mild)' : item.type === 'Exothermic' ? 'var(--exo)' : item.type === 'Dangerous' ? 'var(--danger)' : 'var(--extreme)') }}
                       ></span>
