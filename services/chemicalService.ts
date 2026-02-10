@@ -74,15 +74,18 @@ export async function checkReaction(
 
     const wrapper = await response.json();
     if (wrapper.error) throw new Error(wrapper.error);
-
     let data;
-    try {
 
-      data = JSON.parse(wrapper.result);
-    } catch (e) {
+if (typeof wrapper.result === "string") {
+  try {
+    data = JSON.parse(wrapper.result);
+  } catch {
+    data = parseMarkdownResponse(wrapper.result);
+  }
+} else {
+  data = wrapper.result;
+}
 
-      data = parseMarkdownResponse(wrapper.result);
-    }
 
     let safeType = data.type as SafetyLevel;
     if (!Object.values(SafetyLevel).includes(safeType)) {
